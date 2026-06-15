@@ -14,7 +14,14 @@ echo -e "${GREEN}===============================================${NC}"
 
 echo -e "${CYAN}Starting Python FastAPI Backend on http://localhost:8000...${NC}"
 cd backend
-source venv/bin/activate
+if [ -f "venv/Scripts/activate" ]; then
+    source venv/Scripts/activate
+elif [ -f "venv/bin/activate" ]; then
+    source venv/bin/activate
+else
+    echo "Error: Virtual environment activation script not found!"
+    exit 1
+fi
 uvicorn app.main:app --host 127.0.0.1 --port 8000 &
 BACKEND_PID=$!
 

@@ -33,6 +33,7 @@ class RecordRequest(BaseModel):
     llm_base_url: str | None = None
     llm_model: str | None = None
     max_steps: int = 15
+    plan: list[str] | None = None
 
 class PlaybackRequest(BaseModel):
     workflow_name: str
@@ -51,6 +52,27 @@ class SettingsRequest(BaseModel):
     anthropic_api_key: str | None = None
     local_llm_url: str | None = None
     local_llm_model: str | None = None
+
+class StopRequest(BaseModel):
+    device_serial: str
+
+class PlanGenerateRequest(BaseModel):
+    goal: str
+    llm_provider: str
+    llm_api_key: str | None = None
+    llm_base_url: str | None = None
+    llm_model: str | None = None
+    prompt: str | None = None
+
+class PlanRefineRequest(BaseModel):
+    goal: str
+    current_plan: list[str]
+    feedback: str
+    llm_provider: str
+    llm_api_key: str | None = None
+    llm_base_url: str | None = None
+    llm_model: str | None = None
+    prompt: str | None = None
 
 @app.get("/api/settings")
 def get_settings():
@@ -186,11 +208,15 @@ def record_workflow_stream(req: RecordRequest):
                     emulator=emulator,
                     llm=llm,
                     max_steps=req.max_steps,
-                    step_callback=step_callback
+                    step_callback=step_callback,
+                    plan=req.plan
                 )
-                step_callback({"status": "saved", "workflow": workflow_data})
+                
+                if step_callback:
+                    step_callback({"status": "saved", "workflow": workflow_data})
             except Exception as e:
-                step_callback({"status": "error", "message": f"Recording failed: {str(e)}"})
+                if step_callback:
+                    step_callback({"status": "error", "message": f"Recording failed: {str(e)}"})
 
         # Start background recording
         main_loop.run_in_executor(None, run_recording)
@@ -199,7 +225,7 @@ def record_workflow_stream(req: RecordRequest):
         while True:
             event = await event_queue.get()
             yield f"data: {json.dumps(event)}\n\n"
-            if event.get("status") in ["saved", "error", "completed"]:
+            if event.get("status") in ["saved", "error"]:
                 break
 
     return StreamingResponse(sse_generator(), media_type="text/event-stream")
@@ -245,3 +271,68 @@ def playback_workflow_stream(req: PlaybackRequest):
                 break
 
     return StreamingResponse(sse_generator(), media_type="text/event-stream")
+
+@app.post("/api/stop")
+def stop_execution(req: StopRequest):
+    engine.request_stop(req.device_serial)
+    return {"status": "success", "message": f"Stop requested for device {req.device_serial}"}
+
+@app.get("/api/prompts/{name}")
+def get_prompt_content(name: str):
+    try:
+        from .llm_client import load_prompt
+        content = load_prompt(f"{name}.md")
+        return {"content": content}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Prompt not found")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/plan/generate")
+def generate_plan_api(req: PlanGenerateRequest):
+    try:
+        api_key = req.llm_api_key or (
+            settings.gemini_api_key if req.llm_provider == "gemini" else
+            settings.openai_api_key if req.llm_provider == "openai" else
+            settings.anthropic_api_key if req.llm_provider == "anthropic" else None
+        )
+        base_url = req.llm_base_url or (settings.local_llm_url if req.llm_provider in ["local", "ollama", "vllm"] else None)
+        model = req.llm_model or (settings.local_llm_model if req.llm_provider in ["local", "ollama", "vllm"] else None)
+
+        llm = LLMClient(
+            provider=req.llm_provider,
+            api_key=api_key,
+            base_url=base_url,
+            model=model
+        )
+        plan = llm.generate_initial_plan(req.goal, custom_prompt=req.prompt)
+        return {"plan": plan}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/plan/refine")
+def refine_plan_api(req: PlanRefineRequest):
+    try:
+        api_key = req.llm_api_key or (
+            settings.gemini_api_key if req.llm_provider == "gemini" else
+            settings.openai_api_key if req.llm_provider == "openai" else
+            settings.anthropic_api_key if req.llm_provider == "anthropic" else None
+        )
+        base_url = req.llm_base_url or (settings.local_llm_url if req.llm_provider in ["local", "ollama", "vllm"] else None)
+        model = req.llm_model or (settings.local_llm_model if req.llm_provider in ["local", "ollama", "vllm"] else None)
+
+        llm = LLMClient(
+            provider=req.llm_provider,
+            api_key=api_key,
+            base_url=base_url,
+            model=model
+        )
+        res = llm.refine_plan(
+            goal=req.goal,
+            current_plan=req.current_plan,
+            feedback=req.feedback,
+            custom_prompt=req.prompt
+        )
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

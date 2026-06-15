@@ -220,6 +220,10 @@ class EmulatorManager:
     def input_text(self, text: str):
         if not self.d:
             raise Exception("Device not connected")
+        try:
+            self.d.clear_text()
+        except Exception as e:
+            print(f"Warning: Failed to clear text: {e}")
         self.d.send_keys(text)
 
     def press_key(self, key: str):
@@ -242,3 +246,12 @@ class EmulatorManager:
         if not self.d:
             raise Exception("Device not connected")
         self.d.app_stop(package_name)
+
+    def get_current_package(self) -> str | None:
+        if not self.d:
+            raise Exception("Device not connected")
+        try:
+            curr = self.d.app_current()
+            return curr.get("package") if curr else None
+        except Exception:
+            return None

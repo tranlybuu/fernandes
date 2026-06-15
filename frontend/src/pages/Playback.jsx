@@ -31,6 +31,24 @@ export default function Playback({ selectedDevice, workflowName, onClose, onEdit
     }
   };
 
+  const stopPlayback = async () => {
+    try {
+      const res = await fetch('http://localhost:8000/api/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device_serial: selectedDevice })
+      });
+      if (res.ok) {
+        setLogs(prev => [...prev, { type: 'info', text: 'Stop requested.' }]);
+      } else {
+        throw new Error('Failed to send stop request');
+      }
+    } catch (err) {
+      console.error('Stop error:', err);
+      alert('Error stopping: ' + err.message);
+    }
+  };
+
   const startPlayback = async () => {
     if (!selectedDevice) {
       alert('Please select a device first.');
@@ -160,16 +178,28 @@ export default function Playback({ selectedDevice, workflowName, onClose, onEdit
             <p className="text-xs text-slate-300 mt-1">{workflow?.goal || 'No goal described.'}</p>
           </div>
 
-          <button
-            onClick={startPlayback}
-            disabled={status === 'playing' || !selectedDevice}
-            className="w-full py-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold transition shadow-lg shadow-emerald-500/10 flex items-center justify-center gap-2 disabled:opacity-40"
-          >
-            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M8 5v14l11-7z" />
-            </svg>
-            {status === 'playing' ? 'Running Automation...' : 'Run Playback'}
-          </button>
+          {status === 'playing' ? (
+            <button
+              onClick={stopPlayback}
+              className="w-full py-3 rounded-xl bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-slate-100 text-xs font-bold transition shadow-lg flex items-center justify-center gap-2"
+            >
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+              </svg>
+              Stop Playback
+            </button>
+          ) : (
+            <button
+              onClick={startPlayback}
+              disabled={!selectedDevice}
+              className="w-full py-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold transition shadow-lg shadow-emerald-500/10 flex items-center justify-center gap-2 disabled:opacity-40"
+            >
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M8 5v14l11-7z" />
+              </svg>
+              Run Playback
+            </button>
+          )}
 
           <button
             onClick={() => onEditWorkflow && onEditWorkflow(workflowName, workflow?.goal)}
