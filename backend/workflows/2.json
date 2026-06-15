@@ -1,0 +1,50 @@
+{
+  "name": "2",
+  "goal": "open browser - go to github trending - change tab to developer - click on the first developer on that page",
+  "recorded_at": "2026-06-15 17:10:38",
+  "steps": [
+    {
+      "step_number": 1,
+      "action": "click",
+      "selector": {
+        "resource_id": "",
+        "text": "",
+        "content_desc": "Web View",
+        "class_name": "android.widget.FrameLayout"
+      },
+      "value": null,
+      "description": "Clicking the Chrome icon to open the web browser."
+    },
+    {
+      "step_number": 2,
+      "action": "input_text",
+      "selector": {
+        "resource_id": "",
+        "text": "Chrome",
+        "content_desc": "Chrome",
+        "class_name": "android.widget.TextView"
+      },
+      "value": "github.com/trending/developers",
+      "description": "Type the trending developers URL into the browser address bar."
+    },
+    {
+      "step_number": 3,
+      "action": "press_key",
+      "selector": null,
+      "value": "enter",
+      "description": "Pressing the enter key to navigate to the website."
+    },
+    {
+      "step_number": 4,
+      "action": "click",
+      "selector": {
+        "resource_id": "com.android.chrome:id/url_bar",
+        "text": "github.com",
+        "content_desc": "",
+        "class_name": "android.widget.EditText"
+      },
+      "value": null,
+      "description": "Clicking on the first developer entry (AutoJanitor) listed on the page."
+    }
+  ]
+}

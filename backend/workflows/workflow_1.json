@@ -1,0 +1,81 @@
+{
+  "name": "workflow 1",
+  "goal": "open browser - go to github trending - change tab to developer - click on the first developer on that page",
+  "recorded_at": "2026-06-15 17:03:54",
+  "steps": [
+    {
+      "step_number": 1,
+      "action": "click",
+      "selector": {
+        "resource_id": "",
+        "text": "Chrome",
+        "content_desc": "Chrome",
+        "class_name": "android.widget.TextView"
+      },
+      "value": null,
+      "description": "Clicking the Chrome icon to open the browser."
+    },
+    {
+      "step_number": 2,
+      "action": "click",
+      "selector": {
+        "resource_id": "com.android.chrome:id/negative_button",
+        "text": "Block",
+        "content_desc": "",
+        "class_name": "android.widget.Button"
+      },
+      "value": null,
+      "description": "Clicking 'Block' to dismiss the notification request."
+    },
+    {
+      "step_number": 3,
+      "action": "input_text",
+      "selector": {
+        "resource_id": "com.android.chrome:id/url_bar",
+        "text": "nationthailand.com/news/general/40067413",
+        "content_desc": "",
+        "class_name": "android.widget.EditText"
+      },
+      "value": "github.com/trending",
+      "description": "Type the GitHub trending URL into the address bar."
+    },
+    {
+      "step_number": 4,
+      "action": "press_key",
+      "selector": null,
+      "value": "enter",
+      "description": "Pressing 'enter' to navigate to the GitHub trending page."
+    },
+    {
+      "step_number": 5,
+      "action": "input_text",
+      "selector": {
+        "resource_id": "com.android.chrome:id/url_bar",
+        "text": "github.com/trending",
+        "content_desc": "",
+        "class_name": "android.widget.EditText"
+      },
+      "value": "https://github.com/trending/developers",
+      "description": "Type the correct GitHub trending developers URL into the address bar to navigate to the correct page."
+    },
+    {
+      "step_number": 6,
+      "action": "press_key",
+      "selector": null,
+      "value": "enter",
+      "description": "Pressing the 'enter' key to load the URL currently in the address bar."
+    },
+    {
+      "step_number": 7,
+      "action": "click",
+      "selector": {
+        "resource_id": "",
+        "text": "",
+        "content_desc": "Web View",
+        "class_name": "android.widget.FrameLayout"
+      },
+      "value": null,
+      "description": "Click on the first developer, 'AutoJanitor', which is present in the web view."
+    }
+  ]
+}
