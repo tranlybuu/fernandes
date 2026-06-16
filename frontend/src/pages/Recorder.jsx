@@ -67,7 +67,7 @@ export default function Recorder({ selectedDevice, initialName = '', initialGoal
           if (provider === 'openai') {
             defaultModel = models.find(m => m === 'gpt-4o-mini' || m.includes('gpt-4o')) || models[0];
           } else if (provider === 'gemini') {
-            defaultModel = models.find(m => m === 'gemini-1.5-flash' || m === 'gemini-3.1-flash-lite') || models[0];
+            defaultModel = models.find(m => m === 'gemini-2.5-flash' || m === 'gemini-3.5-flash' || m === 'gemini-3.1-flash-lite' || m === 'gemini-2.0-flash') || models[0];
           } else if (provider === 'anthropic') {
             defaultModel = models.find(m => m.includes('sonnet')) || models[0];
           } else if (provider === 'local') {

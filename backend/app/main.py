@@ -98,7 +98,7 @@ def get_models(provider: str):
     if provider == "gemini":
         key = settings.gemini_api_key
         if not key:
-            return ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-1.5-pro"]
+            return ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-3.1-flash-lite", "gemini-3.5-flash"]
         try:
             import google.generativeai as genai
             genai.configure(api_key=key)
@@ -110,11 +110,11 @@ def get_models(provider: str):
             # Filter gemini models
             models = [m for m in models if m.startswith("gemini-")]
             if not models:
-                models = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-1.5-pro"]
+                models = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-3.1-flash-lite", "gemini-3.5-flash"]
             return models
         except Exception as e:
             print(f"Error fetching Gemini models: {e}")
-            return ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-1.5-pro"]
+            return ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-3.1-flash-lite", "gemini-3.5-flash"]
 
     elif provider == "openai":
         key = settings.openai_api_key
