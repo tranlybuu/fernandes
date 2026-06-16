@@ -14,6 +14,10 @@ export default function Recorder({ selectedDevice, initialName = '', initialGoal
   const [modelName, setModelName] = useState('gemini-3.1-flash-lite');
   const [maxSteps, setMaxSteps] = useState(15);
   
+  // Dynamic model options
+  const [availableModels, setAvailableModels] = useState([]);
+  const [isCustom, setIsCustom] = useState(false);
+  
   // Status states
   const [status, setStatus] = useState('idle'); // idle, recording, completed, error
   const [logs, setLogs] = useState([]);
@@ -41,9 +45,6 @@ export default function Recorder({ selectedDevice, initialName = '', initialGoal
         if (res.ok) {
           const data = await res.json();
           setBackendSettings(data);
-          if (provider === 'local') {
-            setModelName(data.local_llm_model || 'llama3');
-          }
         }
       } catch (err) {
         console.error('Failed to load settings in recorder:', err);
@@ -52,20 +53,52 @@ export default function Recorder({ selectedDevice, initialName = '', initialGoal
     fetchSettings();
   }, []);
 
-  // Update default models when provider changes
+  // Fetch available models whenever provider or backendSettings change
   useEffect(() => {
-    if (provider === 'openai') {
-      setModelName('gpt-4o-mini');
-    } else if (provider === 'gemini') {
-      setModelName('gemini-3.1-flash-lite');
-    } else if (provider === 'anthropic') {
-      setModelName('claude-3-5-sonnet-20241022');
-    } else if (backendSettings) {
-      setModelName(backendSettings.local_llm_model || 'llama3');
-    } else {
-      setModelName('llama3');
-    }
+    const fetchAvailableModels = async () => {
+      try {
+        const res = await fetch(`http://localhost:8000/api/models?provider=${provider}`);
+        if (res.ok) {
+          const models = await res.json();
+          setAvailableModels(models);
+          
+          // Determine the default model to select
+          let defaultModel = '';
+          if (provider === 'openai') {
+            defaultModel = models.find(m => m === 'gpt-4o-mini' || m.includes('gpt-4o')) || models[0];
+          } else if (provider === 'gemini') {
+            defaultModel = models.find(m => m === 'gemini-1.5-flash' || m === 'gemini-3.1-flash-lite') || models[0];
+          } else if (provider === 'anthropic') {
+            defaultModel = models.find(m => m.includes('sonnet')) || models[0];
+          } else if (provider === 'local') {
+            const savedLocal = backendSettings?.local_llm_model;
+            defaultModel = models.find(m => m === savedLocal) || models[0];
+          } else {
+            defaultModel = models[0];
+          }
+          
+          if (defaultModel) {
+            setModelName(defaultModel);
+            setIsCustom(false);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch models:', err);
+      }
+    };
+    
+    fetchAvailableModels();
   }, [provider, backendSettings]);
+
+  const handleModelChange = (val) => {
+    if (val === 'custom') {
+      setIsCustom(true);
+      setModelName('');
+    } else {
+      setIsCustom(false);
+      setModelName(val);
+    }
+  };
 
   const startPlanning = async (e) => {
     e.preventDefault();
@@ -441,12 +474,35 @@ export default function Recorder({ selectedDevice, initialName = '', initialGoal
                 </div>
                 <div>
                   <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">Model</label>
-                  <input
-                    type="text"
-                    value={modelName}
-                    onChange={(e) => setModelName(e.target.value)}
-                    className="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-emerald-500 font-mono"
-                  />
+                  {isCustom ? (
+                    <div className="flex gap-1.5">
+                      <input
+                        type="text"
+                        value={modelName}
+                        onChange={(e) => setModelName(e.target.value)}
+                        placeholder="Custom model name"
+                        className="flex-1 bg-slate-950/80 border border-slate-800 rounded-lg px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-emerald-500 font-mono"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleModelChange(availableModels[0] || '')}
+                        className="text-[10px] text-slate-400 hover:text-slate-200"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <select
+                      value={modelName}
+                      onChange={(e) => handleModelChange(e.target.value)}
+                      className="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-emerald-500 font-mono"
+                    >
+                      {availableModels.map((m) => (
+                        <option key={m} value={m}>{m}</option>
+                      ))}
+                      <option value="custom">Custom...</option>
+                    </select>
+                  )}
                 </div>
               </div>
 
@@ -525,13 +581,38 @@ export default function Recorder({ selectedDevice, initialName = '', initialGoal
 
               <div className="space-y-1.5">
                 <label className="block text-xs font-semibold text-slate-400">LLM Model Name</label>
-                <input
-                  type="text"
-                  value={modelName}
-                  onChange={(e) => setModelName(e.target.value)}
-                  disabled={status === 'recording' || status === 'refining'}
-                  className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 disabled:opacity-50 font-mono"
-                />
+                {isCustom ? (
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={modelName}
+                      onChange={(e) => setModelName(e.target.value)}
+                      disabled={status === 'recording' || status === 'refining'}
+                      placeholder="Enter custom model name"
+                      className="flex-1 bg-slate-950/80 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 disabled:opacity-50 font-mono"
+                    />
+                    <button
+                      type="button"
+                      disabled={status === 'recording' || status === 'refining'}
+                      onClick={() => handleModelChange(availableModels[0] || '')}
+                      className="px-3 rounded-xl border border-slate-800 text-xs text-slate-400 hover:text-slate-200 disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <select
+                    value={modelName}
+                    onChange={(e) => handleModelChange(e.target.value)}
+                    disabled={status === 'recording' || status === 'refining'}
+                    className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-300 focus:outline-none focus:border-emerald-500 disabled:opacity-50 font-mono"
+                  >
+                    {availableModels.map((m) => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                    <option value="custom">Custom...</option>
+                  </select>
+                )}
               </div>
 
               {status === 'recording' || status === 'refining' ? (

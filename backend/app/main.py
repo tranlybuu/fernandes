@@ -89,6 +89,84 @@ def post_settings(req: SettingsRequest):
 def list_devices():
     return EmulatorManager.list_devices()
 
+@app.get("/api/models")
+def get_models(provider: str):
+    provider = provider.lower()
+    import requests
+    from .config import settings
+    
+    if provider == "gemini":
+        key = settings.gemini_api_key
+        if not key:
+            return ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-1.5-pro"]
+        try:
+            import google.generativeai as genai
+            genai.configure(api_key=key)
+            models = []
+            for m in genai.list_models():
+                if "generateContent" in m.supported_generation_methods:
+                    name = m.name.replace("models/", "")
+                    models.append(name)
+            # Filter gemini models
+            models = [m for m in models if m.startswith("gemini-")]
+            if not models:
+                models = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-1.5-pro"]
+            return models
+        except Exception as e:
+            print(f"Error fetching Gemini models: {e}")
+            return ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-1.5-pro"]
+
+    elif provider == "openai":
+        key = settings.openai_api_key
+        if not key:
+            return ["gpt-4o-mini", "gpt-4o", "o1-mini", "o3-mini"]
+        try:
+            from openai import OpenAI
+            client = OpenAI(api_key=key)
+            models_data = client.models.list()
+            models = [m.id for m in models_data.data]
+            filtered = [m for m in models if m.startswith("gpt-") or m.startswith("o1-") or m.startswith("o3-")]
+            if not filtered:
+                filtered = sorted(models)
+            else:
+                filtered = sorted(filtered)
+            return filtered
+        except Exception as e:
+            print(f"Error fetching OpenAI models: {e}")
+            return ["gpt-4o-mini", "gpt-4o", "o1-mini", "o3-mini"]
+
+    elif provider == "anthropic":
+        return [
+            "claude-3-5-sonnet-latest",
+            "claude-3-5-sonnet-20241022",
+            "claude-3-5-haiku-latest",
+            "claude-3-5-haiku-20241022",
+            "claude-3-opus-latest",
+            "claude-3-opus-20240229"
+        ]
+
+    elif provider in ["local", "ollama", "vllm"]:
+        url = settings.local_llm_url
+        try:
+            from openai import OpenAI
+            client = OpenAI(base_url=url, api_key="none")
+            models_data = client.models.list()
+            return sorted([m.id for m in models_data.data])
+        except Exception as e:
+            print(f"Error fetching Local API models: {e}")
+            try:
+                base_url = url.split("/v1")[0]
+                res = requests.get(f"{base_url}/api/tags", timeout=2)
+                if res.status_code == 200:
+                    data = res.json()
+                    return sorted([m["name"] for m in data.get("models", [])])
+            except Exception as ex:
+                print(f"Error fetching direct Ollama tags: {ex}")
+            return ["llama3", "qwen2.5", "mistral", "phi3"]
+
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported provider: {provider}")
+
 @app.get("/api/workflows")
 def list_workflows():
     return engine.list_workflows()
