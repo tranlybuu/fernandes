@@ -1,0 +1,77 @@
+{
+  "name": "github trending ",
+  "goal": "m\u1edf chrome r\u1ed3i v\u00e0o github trending, ch\u1ecdn qua tab developer r\u1ed3i ch\u1ecdn developer \u0111\u1ea7u ti\u00ean \u0111\u1ec3 xem chi ti\u1ebft",
+  "recorded_at": "2026-06-15 22:07:21",
+  "initial_package": "com.google.android.apps.nexuslauncher",
+  "steps": [
+    {
+      "step_number": 1,
+      "action": "click",
+      "selector": {
+        "resource_id": "",
+        "text": "Chrome",
+        "content_desc": "Chrome",
+        "class_name": "android.widget.TextView"
+      },
+      "value": null,
+      "description": "Click on the Chrome app icon to open it."
+    },
+    {
+      "step_number": 2,
+      "action": "click",
+      "selector": {
+        "resource_id": "com.android.chrome:id/negative_button",
+        "text": "No thanks",
+        "content_desc": "",
+        "class_name": "android.widget.Button"
+      },
+      "value": null,
+      "description": "Dismiss the Chrome notification prompt by clicking 'No thanks'."
+    },
+    {
+      "step_number": 3,
+      "action": "input_text",
+      "selector": {
+        "resource_id": "com.android.chrome:id/search_box_text",
+        "text": "Search Google or type URL",
+        "content_desc": "",
+        "class_name": "android.widget.EditText"
+      },
+      "value": "github.com/trending",
+      "description": "Type github.com/trending into the search bar"
+    },
+    {
+      "step_number": 4,
+      "action": "press_key",
+      "selector": null,
+      "value": "enter",
+      "description": "Submit the search query to navigate to github.com/trending"
+    },
+    {
+      "step_number": 5,
+      "action": "click",
+      "selector": null,
+      "value": null,
+      "description": "Since the element ID for the 'Developers' tab is not directly visible in the provided list, I will click on the area where the 'Developers' button is typically located on the GitHub Trending page, assuming it has loaded."
+    },
+    {
+      "step_number": 6,
+      "action": "input_text",
+      "selector": {
+        "resource_id": "com.android.chrome:id/url_bar",
+        "text": "github.com/trending",
+        "content_desc": "",
+        "class_name": "android.widget.EditText"
+      },
+      "value": "https://github.com/trending/developers",
+      "description": "Navigating directly to the developers trending page to bypass the need to click the tab, as it might not be rendering as an interactive element in the current UI tree."
+    },
+    {
+      "step_number": 7,
+      "action": "press_key",
+      "selector": null,
+      "value": "enter",
+      "description": "Submit the URL to load the GitHub Trending Developers page."
+    }
+  ]
+}

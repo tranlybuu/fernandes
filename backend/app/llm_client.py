@@ -5,6 +5,13 @@ from openai import OpenAI
 import google.generativeai as genai
 import anthropic
 from .config import settings
+import os
+
+def load_prompt(filename: str) -> str:
+    prompts_dir = os.path.join(os.path.dirname(__file__), "prompts")
+    filepath = os.path.join(prompts_dir, filename)
+    with open(filepath, "r", encoding="utf-8") as f:
+        return f.read()
 
 class LLMClient:
     def __init__(
@@ -45,7 +52,8 @@ class LLMClient:
         goal: str,
         history: list[dict],
         elements: list[dict],
-        screenshot_base64: str | None = None
+        screenshot_base64: str | None = None,
+        plan: list[str] | None = None
     ) -> dict:
         """
         Sends the UI elements, screenshot, and current state to the LLM.
@@ -68,32 +76,18 @@ class LLMClient:
         for idx, h in enumerate(history):
             history_str += f"Step {idx+1}: Action: {h['action']} on element: {h.get('description', '')} -> Result description: {h.get('result_desc', 'done')}\n"
 
-        system_prompt = (
-            "You are an AI assistant that controls an Android Emulator to achieve a user's goal.\n"
-            "You will look at the current screen elements (and visual screenshot if available) and decide the next action.\n\n"
-            "Here is the list of interactive elements currently visible on the screen:\n"
-            f"{elements_str}\n"
-            "Your available actions are:\n"
-            "1. click: Taps on an element. Specify `target_id` matching the element ID above.\n"
-            "2. input_text: Enters text into an element. Specify `target_id` (the input field) and `value` (the text string).\n"
-            "3. press_key: Presses an Android system key. Specify `value` as 'enter', 'back', 'home', etc. (`target_id` is null).\n"
-            "4. swipe: Swipes the screen. Specify `value` as 'up', 'down', 'left', or 'right' (`target_id` is null).\n"
-            "5. stop: You have completed the goal. (`target_id` and `value` are null).\n\n"
-            "IMPORTANT Rules:\n"
-            "- Only click elements that exist in the list. If you need to click, choose the correct ID.\n"
-            "- If an input field is selected, remember to type and then possibly click search/enter.\n"
-            "- Respond strictly in JSON format. Do not write anything outside the JSON block.\n\n"
-            "JSON Format:\n"
-            "{\n"
-            "  \"thought\": \"Briefly explain your reasoning and what you see on the screen\",\n"
-            "  \"action\": \"click\" | \"input_text\" | \"press_key\" | \"swipe\" | \"stop\",\n"
-            "  \"target_id\": <integer_id_or_null>,\n"
-            "  \"value\": \"<text_to_input_or_key_or_direction_or_null>\",\n"
-            "  \"explanation\": \"Short description of the action taken (e.g. 'Click search button')\"\n"
-            "}"
-        )
+        system_prompt = load_prompt("get_next_action.md").replace("__ELEMENTS_STR__", elements_str)
 
-        user_content = f"Goal: {goal}\n\nPrevious Steps Executed:\n{history_str or 'None'}\n\nDecide the next action."
+        plan_str = ""
+        if plan:
+            plan_str = "\nHigh-Level Plan to follow:\n"
+            for i, p in enumerate(plan):
+                plan_str += f"{i}. {p}\n"
+
+        user_content = f"Goal: {goal}\n"
+        if plan_str:
+            user_content += plan_str
+        user_content += f"\nPrevious Steps Executed:\n{history_str or 'None'}\n\nDecide the next action."
 
         try:
             if self.provider == "gemini":
@@ -237,31 +231,7 @@ class LLMClient:
             el_desc += f" | Clickable: {el['clickable']}"
             elements_str += el_desc + "\n"
 
-        system_prompt = (
-            "You are an AI assistant that heals automated playback scripts on Android.\n"
-            "We are executing a saved workflow, but the expected element for the current step could not be found.\n"
-            "You must look at the current screen elements (and screenshot if available) and decide the best action to recover and continue towards the goal.\n\n"
-            "Here is the list of interactive elements currently visible on the screen:\n"
-            f"{elements_str}\n"
-            "Your available actions are:\n"
-            "1. click: Taps on an element. Specify `target_id`.\n"
-            "2. input_text: Enters text. Specify `target_id` and `value`.\n"
-            "3. press_key: Presses key (e.g. 'back', 'home', 'enter'). Specify `value`.\n"
-            "4. swipe: Swipes 'up', 'down', 'left', or 'right'. Specify `value`.\n"
-            "5. skip: The step is no longer needed (e.g. popup didn't show up, or we are already past it). (`target_id` and `value` are null).\n\n"
-            "Rules:\n"
-            "- If you see that the expected button has a slightly different text, ID, or position, select it by returning the new `target_id`.\n"
-            "- If the screen has already updated or the step was a dismissal of a popup that didn't appear, return 'skip'.\n"
-            "- Respond strictly in JSON format.\n\n"
-            "JSON Format:\n"
-            "{\n"
-            "  \"thought\": \"Reasoning about what changed and what to do next\",\n"
-            "  \"action\": \"click\" | \"input_text\" | \"press_key\" | \"swipe\" | \"skip\",\n"
-            "  \"target_id\": <integer_id_or_null>,\n"
-            "  \"value\": \"<text_or_key_or_direction_or_null>\",\n"
-            "  \"explanation\": \"Short description of the recovery action\"\n"
-            "}"
-        )
+        system_prompt = load_prompt("heal_step.md").replace("__ELEMENTS_STR__", elements_str)
 
         user_content = (
             f"Original Goal: {goal}\n\n"
@@ -291,5 +261,147 @@ class LLMClient:
                 "target_id": None,
                 "value": None,
                 "explanation": "Error fallback skip"
+            }
+
+    def assess_refinement_runs(self, goal: str, steps: list[dict]) -> int:
+        """
+        Asks the LLM to evaluate the recorded workflow and decide if we need 
+        1 or 2 runs to verify/refine it.
+        Returns the number of runs (1 or 2).
+        """
+        steps_str = json.dumps(steps, indent=2)
+        system_prompt = load_prompt("assess_refinement.md")
+        user_content = f"Goal: {goal}\n\nSteps:\n{steps_str}"
+        try:
+            if self.provider == "gemini":
+                res = self._call_gemini(system_prompt, user_content, None)
+            elif self.provider == "openai":
+                res = self._call_openai(system_prompt, user_content, None)
+            elif self.provider == "anthropic":
+                res = self._call_anthropic(system_prompt, user_content, None)
+            else:
+                res = self._call_openai(system_prompt, user_content, None)
+            
+            runs = int(res.get("runs", 1))
+            if runs not in [1, 2]:
+                runs = 1
+            return runs
+        except Exception as e:
+            print(f"Refinement assessment failed: {e}")
+            return 1
+
+    def generate_initial_plan(self, goal: str, custom_prompt: str | None = None) -> list[str]:
+        """Generates an initial high-level plan (checklist) to achieve the goal."""
+        system_prompt = custom_prompt if custom_prompt is not None else load_prompt("generate_plan.md")
+        user_content = f"Goal: {goal}"
+        try:
+            if self.provider == "gemini":
+                res = self._call_gemini(system_prompt, user_content, None)
+            elif self.provider == "openai":
+                res = self._call_openai(system_prompt, user_content, None)
+            elif self.provider == "anthropic":
+                res = self._call_anthropic(system_prompt, user_content, None)
+            else:
+                res = self._call_openai(system_prompt, user_content, None)
+            
+            plan = res.get("plan", [])
+            if not isinstance(plan, list):
+                plan = [goal]
+            return plan
+        except Exception as e:
+            print(f"Plan generation failed: {e}")
+            return [goal]
+
+    def validate_step_progress(
+        self,
+        goal: str,
+        plan: list[str],
+        history: list[dict],
+        elements: list[dict],
+        screenshot_base64: str | None = None
+    ) -> dict:
+        """
+        Validates progress against the plan after a step is executed.
+        Returns which plan steps are completed, the current active plan step, and if the overall goal is achieved.
+        """
+        elements_str = ""
+        for el in elements:
+            el_desc = f"ID: {el.get('visual_id', el.get('id'))} | Class: {el['class_name']}"
+            if el['text']:
+                el_desc += f" | Text: '{el['text']}'"
+            if el['content_desc']:
+                el_desc += f" | Desc: '{el['content_desc']}'"
+            el_desc += f" | Clickable: {el['clickable']}"
+            elements_str += el_desc + "\n"
+
+        history_str = ""
+        for idx, h in enumerate(history):
+            history_str += f"Step {idx+1}: Action: {h['action']} -> {h.get('description', '')}\n"
+
+        plan_str = ""
+        for idx, item in enumerate(plan):
+            plan_str += f"{idx}: {item}\n"
+
+        system_prompt = load_prompt("validate_progress.md").replace("__ELEMENTS_STR__", elements_str)
+
+        user_content = (
+            f"Goal: {goal}\n\n"
+            f"Plan:\n{plan_str}\n\n"
+            f"Execution History:\n{history_str or 'None'}\n\n"
+            "Assess the progress."
+        )
+
+        try:
+            if self.provider == "gemini":
+                return self._call_gemini(system_prompt, user_content, screenshot_base64)
+            elif self.provider == "openai":
+                return self._call_openai(system_prompt, user_content, screenshot_base64)
+            elif self.provider == "anthropic":
+                return self._call_anthropic(system_prompt, user_content, screenshot_base64)
+            else:
+                return self._call_openai(system_prompt, user_content, screenshot_base64)
+        except Exception as e:
+            print(f"Progress validation failed: {e}")
+            return {
+                "completed_indices": [],
+                "current_index": 0,
+                "goal_achieved": False
+            }
+
+    def refine_plan(
+        self,
+        goal: str,
+        current_plan: list[str],
+        feedback: str,
+        custom_prompt: str | None = None
+    ) -> dict:
+        """Refines the current plan based on user feedback."""
+        system_prompt = custom_prompt if custom_prompt is not None else load_prompt("refine_plan.md")
+        
+        plan_str = "\n".join([f"- {item}" for item in current_plan])
+        user_content = (
+            f"Goal: {goal}\n\n"
+            f"Current Plan:\n{plan_str}\n\n"
+            f"User Feedback: {feedback}"
+        )
+        
+        try:
+            if self.provider == "gemini":
+                res = self._call_gemini(system_prompt, user_content, None)
+            elif self.provider == "openai":
+                res = self._call_openai(system_prompt, user_content, None)
+            elif self.provider == "anthropic":
+                res = self._call_anthropic(system_prompt, user_content, None)
+            else:
+                res = self._call_openai(system_prompt, user_content, None)
+            
+            plan = res.get("plan", current_plan)
+            response = res.get("response", "I have updated the plan according to your feedback.")
+            return {"plan": plan, "response": response}
+        except Exception as e:
+            print(f"Plan refinement failed: {e}")
+            return {
+                "plan": current_plan,
+                "response": f"Failed to refine plan: {e}"
             }
 

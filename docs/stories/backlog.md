@@ -10,4 +10,4 @@ the work is selected or when a product decision needs a durable place to land.
 
 | Epic | Description | Status |
 | --- | --- | --- |
-| TBD | Add candidate epics after spec intake | unsliced |
+| US-prompt-updates | Enhance BE prompts with browser-use rules and improve input clearing | implemented |

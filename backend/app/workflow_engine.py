@@ -9,6 +9,7 @@ class WorkflowEngine:
     def __init__(self, workflows_dir: str = settings.workflows_dir):
         self.workflows_dir = workflows_dir
         os.makedirs(self.workflows_dir, exist_ok=True)
+        self.stop_requested = set()
 
     def get_workflow_path(self, name: str) -> str:
         # Clean filename
@@ -40,6 +41,10 @@ class WorkflowEngine:
         if os.path.exists(path):
             os.remove(path)
 
+    def request_stop(self, device_serial: str):
+        if device_serial:
+            self.stop_requested.add(device_serial)
+
     def record_workflow(
         self,
         name: str,
@@ -47,7 +52,8 @@ class WorkflowEngine:
         emulator: EmulatorManager,
         llm: LLMClient,
         max_steps: int = 15,
-        step_callback=None
+        step_callback=None,
+        plan: list[str] | None = None
     ) -> dict:
         """
         Runs the LLM-driven recording loop.
@@ -57,11 +63,36 @@ class WorkflowEngine:
         steps = []
         history = []
         
+        # Capture current package at start of recording
+        initial_package = None
+        try:
+            initial_package = emulator.get_current_package()
+        except Exception:
+            pass
+        
+        # Generate or use high-level plan
+        if plan is not None:
+            if step_callback:
+                step_callback({"status": "plan_generated", "plan": plan})
+        else:
+            if step_callback:
+                step_callback({"status": "starting", "message": "Analyzing goal and generating initial plan..."})
+            plan = llm.generate_initial_plan(goal)
+            if step_callback:
+                step_callback({"status": "plan_generated", "plan": plan})
+        
         if step_callback:
             step_callback({"status": "starting", "message": f"Starting recording for workflow: {name}"})
 
         for step_idx in range(max_steps):
             try:
+                # Check for stop request
+                if emulator.device_serial in self.stop_requested:
+                    self.stop_requested.discard(emulator.device_serial)
+                    if step_callback:
+                        step_callback({"status": "completed", "message": "Recording stopped by user."})
+                    break
+
                 # 1. Take annotated screenshot and parse elements
                 screenshot_b64, elements = emulator.get_annotated_screenshot()
                 
@@ -73,7 +104,8 @@ class WorkflowEngine:
                     goal=goal,
                     history=history,
                     elements=elements,
-                    screenshot_base64=screenshot_b64
+                    screenshot_base64=screenshot_b64,
+                    plan=plan
                 )
                 
                 action = llm_response.get("action")
@@ -172,6 +204,47 @@ class WorkflowEngine:
                 # Pause to let UI transition
                 time.sleep(2.0)
 
+                # 7. Validate step progress
+                try:
+                    val_screenshot_b64, val_elements = emulator.get_annotated_screenshot()
+                    
+                    if step_callback:
+                        step_callback({"status": "thinking", "step": step_idx + 1, "message": "Validating step progress..."})
+                    
+                    val_res = llm.validate_step_progress(
+                        goal=goal,
+                        plan=plan,
+                        history=history,
+                        elements=val_elements,
+                        screenshot_base64=val_screenshot_b64
+                    )
+                    
+                    completed_indices = val_res.get("completed_indices", [])
+                    current_index = val_res.get("current_index", 0)
+                    goal_achieved = val_res.get("goal_achieved", False)
+                    is_looping = val_res.get("is_looping", False)
+                    reason = val_res.get("reason", "")
+                    
+                    if step_callback:
+                        step_callback({
+                            "status": "plan_update",
+                            "completed_indices": completed_indices,
+                            "current_index": current_index,
+                            "goal_achieved": goal_achieved
+                        })
+                    
+                    if is_looping:
+                        if step_callback:
+                            step_callback({"status": "completed", "message": f"Loop detected: {reason or 'Repeated execution loop'}. Stopping flow validation."})
+                        break
+
+                    if goal_achieved:
+                        if step_callback:
+                            step_callback({"status": "completed", "message": "Goal fully achieved based on validation! Recording stopped."})
+                        break
+                except Exception as val_err:
+                    print(f"Validation error: {val_err}")
+
             except Exception as e:
                 if step_callback:
                     step_callback({"status": "error", "message": f"Error during recording step: {e}"})
@@ -183,6 +256,7 @@ class WorkflowEngine:
             "name": name,
             "goal": goal,
             "recorded_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "initial_package": initial_package,
             "steps": steps
         }
         self.save_workflow(name, workflow_data)
@@ -230,24 +304,65 @@ class WorkflowEngine:
 
         return best_match
 
+    def reset_to_initial_state(self, initial_package: str | None, emulator: EmulatorManager):
+        if not initial_package:
+            # Fallback to pressing home
+            emulator.press_key("home")
+            time.sleep(2.0)
+            return
+        
+        # Check if the package is a launcher
+        is_launcher = any(launcher in initial_package for launcher in [
+            "launcher", "trebuchet", "desktop", "carousellauncher", "com.android.systemui"
+        ])
+        
+        if is_launcher:
+            emulator.press_key("home")
+        else:
+            try:
+                emulator.stop_app(initial_package)
+                time.sleep(1.0)
+                emulator.launch_app(initial_package)
+            except Exception:
+                emulator.press_key("home")
+        time.sleep(3.0) # Let the app/home screen load
+
     def playback_workflow(
         self,
         name: str,
         emulator: EmulatorManager,
-        step_callback=None
+        step_callback=None,
+        is_refining: bool = False
     ) -> bool:
         """
-        Executes a recorded workflow deterministically.
+        Executes a recorded workflow.
         Loads steps from JSON, resolves semantic selectors, and performs actions.
-        NO LLM is used.
+        If a step fails, LLM is used for up to 3 self-healing attempts.
         """
         workflow = self.load_workflow(name)
         steps = workflow.get("steps", [])
+        initial_package = workflow.get("initial_package")
 
         if step_callback:
             step_callback({"status": "starting", "message": f"Starting playback of workflow '{name}'"})
 
-        for idx, step in enumerate(steps):
+        # Reset emulator to initial state
+        if initial_package or is_refining:
+            if step_callback:
+                step_callback({"status": "starting", "message": "Resetting emulator to initial state..."})
+            self.reset_to_initial_state(initial_package, emulator)
+
+        # Iterate over a static copy of the steps list to prevent index shifting issues when mutating workflow steps
+        steps_for_execution = list(steps)
+
+        for idx, step in enumerate(steps_for_execution):
+            # Check for stop request
+            if emulator.device_serial in self.stop_requested:
+                self.stop_requested.discard(emulator.device_serial)
+                if step_callback:
+                    step_callback({"status": "completed", "message": "Playback stopped by user."})
+                return False
+
             step_num = step.get("step_number", idx + 1)
             action = step["action"]
             selector = step.get("selector")
@@ -280,121 +395,217 @@ class WorkflowEngine:
 
                     if not matched_el:
                         # Deterministic matching failed! Try self-healing using LLM.
-                        if step_callback:
-                            step_callback({
-                                "status": "healing", 
-                                "step": step_num, 
-                                "message": f"Element not found. Starting LLM Self-Healing..."
-                            })
-                        
-                        # Initialize LLM Client
-                        from .config import settings
-                        from .llm_client import LLMClient
-                        
-                        # Build default client from persistent config
-                        provider = "gemini"
-                        api_key = settings.gemini_api_key
-                        if not api_key:
-                            if settings.openai_api_key:
-                                provider = "openai"
-                                api_key = settings.openai_api_key
-                            elif settings.anthropic_api_key:
-                                provider = "anthropic"
-                                api_key = settings.anthropic_api_key
-                            else:
-                                provider = "local"
-                        
-                        llm = LLMClient(
-                            provider=provider,
-                            api_key=api_key,
-                            base_url=settings.local_llm_url if provider == "local" else None,
-                            model=settings.local_llm_model if provider == "local" else None
-                        )
-                        
-                        # Capture screen elements and annotated screenshot
-                        screenshot_b64, current_elements = emulator.get_annotated_screenshot()
-                        
-                        # Call LLM to suggest recovery action
-                        heal_res = llm.heal_step(
-                            goal=workflow.get("goal", ""),
-                            failed_step=step,
-                            elements=current_elements,
-                            screenshot_base64=screenshot_b64
-                        )
-                        
-                        heal_action = heal_res.get("action")
-                        heal_target_id = heal_res.get("target_id")
-                        heal_value = heal_res.get("value")
-                        heal_explanation = heal_res.get("explanation", "")
-                        
-                        if step_callback:
-                            step_callback({
-                                "status": "healing_decision",
-                                "step": step_num,
-                                "message": f"LLM decided: {heal_action.upper()} - {heal_explanation}"
-                            })
-                        
-                        if heal_action == "skip":
-                            if step_callback:
-                                step_callback({"status": "success", "step": step_num, "message": "Step skipped by LLM"})
-                            time.sleep(1.0)
-                            continue
-                        
-                        # Execute healed action
-                        healed_el = None
-                        if heal_action in ["click", "input_text"] and heal_target_id is not None:
-                            for el in current_elements:
-                                if el.get("visual_id") == int(heal_target_id):
-                                    healed_el = el
-                                    break
-                            
-                            if not healed_el:
-                                raise Exception(f"LLM specified visual ID {heal_target_id} for healing, but it was not found on screen.")
-                            
-                            cx, cy = healed_el["center"]
-                            if heal_action == "click":
-                                emulator.click(cx, cy)
-                            elif heal_action == "input_text":
-                                emulator.click(cx, cy)
-                                time.sleep(0.5)
-                                emulator.input_text(heal_value or value)
-                                
-                            # SELF-HEALING UPDATE:
-                            # Update the step's selector in the active workflow steps list
-                            step["selector"] = {
-                                "resource_id": healed_el.get("resource_id"),
-                                "text": healed_el.get("text"),
-                                "content_desc": healed_el.get("content_desc"),
-                                "class_name": healed_el.get("class_name")
-                            }
-                            # Update workflow file on disk
-                            workflow["steps"][idx] = step
-                            self.save_workflow(name, workflow)
+                        passed = False
+                        for heal_attempt in range(3):
                             if step_callback:
                                 step_callback({
-                                    "status": "healed", 
+                                    "status": "healing", 
                                     "step": step_num, 
-                                    "message": f"Saved workflow '{name}.json' has been self-healed!"
+                                    "message": f"Element not found. Starting LLM Self-Healing (Attempt {heal_attempt + 1}/3)..."
                                 })
+                            
+                            # Initialize LLM Client
+                            from .config import settings
+                            from .llm_client import LLMClient
+                            
+                            provider = "gemini"
+                            api_key = settings.gemini_api_key
+                            if not api_key:
+                                if settings.openai_api_key:
+                                    provider = "openai"
+                                    api_key = settings.openai_api_key
+                                elif settings.anthropic_api_key:
+                                    provider = "anthropic"
+                                    api_key = settings.anthropic_api_key
+                                else:
+                                    provider = "local"
+                            
+                            llm = LLMClient(
+                                provider=provider,
+                                api_key=api_key,
+                                base_url=settings.local_llm_url if provider == "local" else None,
+                                model=settings.local_llm_model if provider == "local" else None
+                            )
+                            
+                            # Capture screen elements and annotated screenshot
+                            screenshot_b64, current_elements = emulator.get_annotated_screenshot()
+                            
+                            # Call LLM to suggest recovery action
+                            heal_res = llm.heal_step(
+                                goal=workflow.get("goal", ""),
+                                failed_step=step,
+                                elements=current_elements,
+                                screenshot_base64=screenshot_b64
+                            )
+                            
+                            heal_action = heal_res.get("action")
+                            heal_target_id = heal_res.get("target_id")
+                            heal_value = heal_res.get("value")
+                            heal_explanation = heal_res.get("explanation", "")
+                            heal_type = heal_res.get("type", "recovery")
+                            
+                            if step_callback:
+                                step_callback({
+                                    "status": "healing_decision",
+                                    "step": step_num,
+                                    "message": f"LLM decided: {heal_action.upper()} ({heal_type}) - {heal_explanation}"
+                                })
+                            
+                            if heal_action == "skip":
+                                if step_callback:
+                                    step_callback({"status": "success", "step": step_num, "message": "Step skipped by LLM"})
+                                time.sleep(1.0)
+                                passed = True
+                                break
+                            
+                            # Execute healed action
+                            healed_el = None
+                            if heal_action in ["click", "input_text"] and heal_target_id is not None:
+                                for el in current_elements:
+                                    if el.get("visual_id") == int(heal_target_id):
+                                        healed_el = el
+                                        break
                                 
-                        elif heal_action == "press_key":
-                            emulator.press_key(heal_value)
-                        elif heal_action == "swipe":
-                            width, height = emulator.d.window_size()
-                            cx, cy = width // 2, height // 2
-                            if heal_value == "up":
-                                emulator.swipe(cx, cy + int(height * 0.25), cx, cy - int(height * 0.25))
-                            elif heal_value == "down":
-                                emulator.swipe(cx, cy - int(height * 0.25), cx, cy + int(height * 0.25))
-                            elif heal_value == "left":
-                                emulator.swipe(cx + int(width * 0.25), cy, cx - int(width * 0.25), cy)
-                            elif heal_value == "right":
-                                emulator.swipe(cx - int(width * 0.25), cy, cx + int(width * 0.25), cy)
-                        else:
-                            raise Exception(f"Failed to find element and LLM healing was unable to recover.")
+                                if not healed_el:
+                                    if step_callback:
+                                        step_callback({
+                                            "status": "healing",
+                                            "step": step_num,
+                                            "message": f"LLM specified visual ID {heal_target_id} for healing, but it was not found on screen."
+                                        })
+                                    time.sleep(1.0)
+                                    continue
+                                
+                                cx, cy = healed_el["center"]
+                                if heal_action == "click":
+                                    emulator.click(cx, cy)
+                                elif heal_action == "input_text":
+                                    emulator.click(cx, cy)
+                                    time.sleep(0.5)
+                                    emulator.input_text(heal_value or value)
+                            
+                            elif heal_action == "press_key":
+                                emulator.press_key(heal_value)
+                            elif heal_action == "swipe":
+                                width, height = emulator.d.window_size()
+                                cx, cy = width // 2, height // 2
+                                if heal_value == "up":
+                                    emulator.swipe(cx, cy + int(height * 0.25), cx, cy - int(height * 0.25))
+                                elif heal_value == "down":
+                                    emulator.swipe(cx, cy - int(height * 0.25), cx, cy + int(height * 0.25))
+                                elif heal_value == "left":
+                                    emulator.swipe(cx + int(width * 0.25), cy, cx - int(width * 0.25), cy)
+                                elif heal_value == "right":
+                                    emulator.swipe(cx - int(width * 0.25), cy, cx + int(width * 0.25), cy)
+                            else:
+                                if step_callback:
+                                    step_callback({
+                                        "status": "healing",
+                                        "step": step_num,
+                                        "message": f"LLM healing was unable to recover or returned unknown action: {heal_action}"
+                                    })
+                                time.sleep(1.0)
+                                continue
+                            
+                            # Wait for screen update
+                            time.sleep(2.0)
+                            
+                            if heal_type == "selector_update":
+                                # Selector update means this element *is* the target element, just updated.
+                                # The step has now been executed.
+                                if is_refining and healed_el:
+                                    # Find the exact step reference in workflow["steps"] to update it
+                                    for s in workflow["steps"]:
+                                        if s is step:
+                                            s["selector"] = {
+                                                "resource_id": healed_el.get("resource_id"),
+                                                "text": healed_el.get("text"),
+                                                "content_desc": healed_el.get("content_desc"),
+                                                "class_name": healed_el.get("class_name")
+                                            }
+                                            break
+                                    self.save_workflow(name, workflow)
+                                    if step_callback:
+                                        step_callback({
+                                            "status": "healed",
+                                            "step": step_num,
+                                            "message": f"Saved workflow '{name}.json' has been self-healed (selector updated)!"
+                                        })
+                                passed = True
+                                break
+                            
+                            else: # "recovery" action
+                                # Insert recovery action into workflow on disk if we are in refinement mode
+                                if is_refining:
+                                    recovery_step = {
+                                        "step_number": idx + 1,
+                                        "action": heal_action,
+                                        "selector": {
+                                            "resource_id": healed_el.get("resource_id") if healed_el else None,
+                                            "text": healed_el.get("text") if healed_el else None,
+                                            "content_desc": healed_el.get("content_desc") if healed_el else None,
+                                            "class_name": healed_el.get("class_name") if healed_el else None
+                                        } if heal_action in ["click", "input_text"] else None,
+                                        "value": heal_value,
+                                        "description": f"Healed recovery: {heal_explanation}"
+                                    }
+                                    
+                                    # Find step index dynamically in case it shifted
+                                    target_idx = -1
+                                    for i, s in enumerate(workflow["steps"]):
+                                        if s is step:
+                                            target_idx = i
+                                            break
+                                    if target_idx != -1:
+                                        workflow["steps"].insert(target_idx, recovery_step)
+                                        for i, s in enumerate(workflow["steps"]):
+                                            s["step_number"] = i + 1
+                                        self.save_workflow(name, workflow)
+                                        if step_callback:
+                                            step_callback({
+                                                "status": "healed",
+                                                "step": step_num,
+                                                "message": f"Saved workflow '{name}.json' has been self-healed (inserted recovery step)!"
+                                            })
+                                
+                                # Now check if the original element is visible
+                                elements = emulator.extract_elements()
+                                matched_el = self.find_matching_element(selector, elements)
+                                if matched_el:
+                                    cx, cy = matched_el["center"]
+                                    if action == "click":
+                                        emulator.click(cx, cy)
+                                    elif action == "input_text":
+                                        emulator.click(cx, cy)
+                                        time.sleep(0.5)
+                                        emulator.input_text(value)
+                                    passed = True
+                                    if step_callback:
+                                        step_callback({
+                                            "status": "success",
+                                            "step": step_num,
+                                            "message": "Original step executed successfully after recovery!"
+                                        })
+                                    time.sleep(2.0)
+                                    break
+                                else:
+                                    if step_callback:
+                                        step_callback({
+                                            "status": "healing",
+                                            "step": step_num,
+                                            "message": "Original element still not found after recovery. Retrying..."
+                                        })
+                        
+                        if not passed:
+                            if step_callback:
+                                step_callback({
+                                    "status": "failed",
+                                    "step": step_num,
+                                    "message": f"Step {step_num} failed after 3 healing attempts. Proceeding to next step..."
+                                })
+                            continue
                     else:
                         cx, cy = matched_el["center"]
-                        
                         if action == "click":
                             emulator.click(cx, cy)
                         elif action == "input_text":
@@ -430,7 +641,8 @@ class WorkflowEngine:
                 if step_callback:
                     step_callback({"status": "failed", "step": step_num, "message": str(e)})
                 print(f"Playback error at step {step_num}: {e}")
-                return False
+                # Proceed to next step without aborting
+                continue
 
         if step_callback:
             step_callback({"status": "completed", "message": "Playback completed successfully."})
