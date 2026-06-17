@@ -11,7 +11,7 @@ export default function Dashboard({ selectedDevice, setSelectedDevice, onPlayWor
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('http://localhost:8000/api/workflows');
+      const res = await fetch('http://127.0.0.1:8000/api/workflows');
       if (!res.ok) throw new Error('Failed to fetch workflows');
       const data = await res.json();
       setWorkflows(data);
@@ -25,7 +25,7 @@ export default function Dashboard({ selectedDevice, setSelectedDevice, onPlayWor
   const deleteWorkflow = async (name) => {
     if (!confirm(`Are you sure you want to delete workflow "${name}"?`)) return;
     try {
-      const res = await fetch(`http://localhost:8000/api/workflows/${name}`, {
+      const res = await fetch(`http://127.0.0.1:8000/api/workflows/${name}`, {
         method: 'DELETE'
       });
       if (!res.ok) throw new Error('Failed to delete workflow');

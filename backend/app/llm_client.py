@@ -1,17 +1,19 @@
 import json
 import base64
 import requests
-from openai import OpenAI
-import google.generativeai as genai
-import anthropic
 from .config import settings
 import os
+
+from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_anthropic import ChatAnthropic
 
 def load_prompt(filename: str) -> str:
     prompts_dir = os.path.join(os.path.dirname(__file__), "prompts")
     filepath = os.path.join(prompts_dir, filename)
     with open(filepath, "r", encoding="utf-8") as f:
         return f.read()
+
 
 class LLMClient:
     def __init__(
@@ -26,103 +28,80 @@ class LLMClient:
         self.base_url = base_url
         self.model = model
 
-        # Initialize clients based on provider
         if self.provider == "openai":
-            self.client = OpenAI(api_key=api_key or settings.openai_api_key)
-            self.model = model or "gpt-4o-mini"
-        elif self.provider == "gemini":
-            key = api_key or settings.gemini_api_key
-            if key:
-                genai.configure(api_key=key)
-            self.model = model or "gemini-3.1-flash-lite"
-        elif self.provider == "anthropic":
-            self.client = anthropic.Anthropic(api_key=api_key or settings.anthropic_api_key)
-            self.model = model or "claude-3-5-sonnet-20241022"
-        elif self.provider in ["local", "ollama", "vllm"]:
-            self.client = OpenAI(
-                base_url=base_url or settings.local_llm_url,
-                api_key="none"  # Not needed for local APIs
+            model_to_use = self.model or "gpt-4o-mini"
+            self.llm = ChatOpenAI(
+                model=model_to_use,
+                api_key=api_key or settings.openai_api_key,
+                temperature=0.1,
+                timeout=30.0,
+                model_kwargs={"response_format": {"type": "json_object"}} if "gpt" in model_to_use else {}
             )
-            self.model = model or settings.local_llm_model
+            self.model = model_to_use
+        elif self.provider == "gemini":
+            model_to_use = self.model or "gemini-2.5-flash"
+            self.llm = ChatGoogleGenerativeAI(
+                model=model_to_use,
+                api_key=api_key or settings.gemini_api_key,
+                temperature=0.1,
+                timeout=30.0,
+                response_mime_type="application/json",
+                model_kwargs={"transport": "rest"}
+            )
+            self.model = model_to_use
+        elif self.provider == "anthropic":
+            model_to_use = self.model or "claude-3-5-sonnet-20241022"
+            self.llm = ChatAnthropic(
+                model=model_to_use,
+                api_key=api_key or settings.anthropic_api_key,
+                temperature=0.1,
+                timeout=30.0,
+                max_tokens=2000
+            )
+            self.model = model_to_use
+        elif self.provider in ["local", "ollama", "vllm"]:
+            model_to_use = self.model or settings.local_llm_model
+            self.llm = ChatOpenAI(
+                model=model_to_use,
+                base_url=base_url or settings.local_llm_url,
+                api_key="none",
+                temperature=0.1,
+                timeout=30.0
+            )
+            self.model = model_to_use
         else:
             raise ValueError(f"Unsupported LLM provider: {provider}")
 
-    def get_next_action(
-        self,
-        goal: str,
-        history: list[dict],
-        elements: list[dict],
-        screenshot_base64: str | None = None,
-        plan: list[str] | None = None
-    ) -> dict:
-        """
-        Sends the UI elements, screenshot, and current state to the LLM.
-        Returns the parsed action dictionary.
-        """
-        # Format the elements for the LLM
-        elements_str = ""
-        for el in elements:
-            el_desc = f"ID: {el.get('visual_id', el.get('id'))} | Class: {el['class_name']}"
-            if el['text']:
-                el_desc += f" | Text: '{el['text']}'"
-            if el['content_desc']:
-                el_desc += f" | Desc: '{el['content_desc']}'"
-            if el['resource_id']:
-                el_desc += f" | ResourceId: '{el['resource_id']}'"
-            el_desc += f" | Clickable: {el['clickable']}"
-            elements_str += el_desc + "\n"
+    # ─────────────────────────────────────────────────────────────────────
+    # Core LLM dispatch helpers
+    # ─────────────────────────────────────────────────────────────────────
 
-        history_str = ""
-        for idx, h in enumerate(history):
-            history_str += f"Step {idx+1}: Action: {h['action']} on element: {h.get('description', '')} -> Result description: {h.get('result_desc', 'done')}\n"
-
-        system_prompt = load_prompt("get_next_action.md").replace("__ELEMENTS_STR__", elements_str)
-
-        plan_str = ""
-        if plan:
-            plan_str = "\nHigh-Level Plan to follow:\n"
-            for i, p in enumerate(plan):
-                plan_str += f"{i}. {p}\n"
-
-        user_content = f"Goal: {goal}\n"
-        if plan_str:
-            user_content += plan_str
-        user_content += f"\nPrevious Steps Executed:\n{history_str or 'None'}\n\nDecide the next action."
-
-        try:
-            if self.provider == "gemini":
-                return self._call_gemini(system_prompt, user_content, screenshot_base64)
-            elif self.provider == "openai":
-                return self._call_openai(system_prompt, user_content, screenshot_base64)
-            elif self.provider == "anthropic":
-                return self._call_anthropic(system_prompt, user_content, screenshot_base64)
-            else: # Local / Ollama / vLLM (using OpenAI API compatible format)
-                # Local LLMs might not have vision or might fail with images.
-                # If screenshot is provided and model supports vision, use vision. Else fall back to text.
-                return self._call_openai(system_prompt, user_content, screenshot_base64)
-        except Exception as e:
-            print(f"LLM API Call failed: {e}")
-            # Fallback action
-            return {
-                "thought": f"An error occurred: {e}. Stopping execution.",
-                "action": "stop",
-                "target_id": None,
-                "value": None,
-                "explanation": "Error fallback stop"
-            }
-
-    def _clean_json(self, text: str) -> dict:
+    def _clean_json(self, text) -> dict:
         """Cleans LLM response and parses it into JSON."""
+        if not isinstance(text, str):
+            if isinstance(text, list):
+                extracted = []
+                for item in text:
+                    if isinstance(item, dict):
+                        if "text" in item:
+                            extracted.append(item["text"])
+                    elif isinstance(item, str):
+                        extracted.append(item)
+                text = "".join(extracted)
+            else:
+                text = str(text)
+
         cleaned = text.strip()
         if cleaned.startswith("```json"):
             cleaned = cleaned[7:]
+        if cleaned.startswith("```"):
+            cleaned = cleaned[3:]
         if cleaned.endswith("```"):
             cleaned = cleaned[:-3]
         cleaned = cleaned.strip()
         try:
             return json.loads(cleaned)
         except json.JSONDecodeError:
-            # Try finding JSON block using regex if parsing failed
             import re
             match = re.search(r"\{.*\}", cleaned, re.DOTALL)
             if match:
@@ -130,83 +109,297 @@ class LLMClient:
                     return json.loads(match.group(0))
                 except Exception:
                     pass
-            raise Exception(f"Failed to parse JSON from response: {text}")
+            raise Exception(f"Failed to parse JSON from LLM response: {text[:200]}")
 
-    def _call_openai(self, system_prompt: str, user_content: str, screenshot_base64: str | None) -> dict:
+    def _dispatch(self, system_prompt: str, user_content: str, screenshot_base64: str | None = None) -> dict:
+        """Route to the langchain model."""
+        from langchain_core.messages import SystemMessage, HumanMessage
+        
         messages = [
-            {"role": "system", "content": system_prompt}
+            SystemMessage(content=system_prompt)
         ]
-
-        if screenshot_base64 and "gpt" in self.model:
-            # Multimodal messages format
+        
+        if screenshot_base64:
             user_msg_content = [
                 {"type": "text", "text": user_content},
                 {
                     "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/png;base64,{screenshot_base64}"
-                    }
+                    "image_url": {"url": f"data:image/png;base64,{screenshot_base64}"}
                 }
             ]
-            messages.append({"role": "user", "content": user_msg_content})
+            messages.append(HumanMessage(content=user_msg_content))
         else:
-            messages.append({"role": "user", "content": user_content})
+            messages.append(HumanMessage(content=user_content))
+            
+        response = self.llm.invoke(messages)
+        return self._clean_json(response.content)
 
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            response_format={"type": "json_object"} if "gpt" in self.model else None,
-            temperature=0.1
+    # ─────────────────────────────────────────────────────────────────────
+    # Helper: format elements list for prompts
+    # ─────────────────────────────────────────────────────────────────────
+
+    def _format_elements(self, elements: list[dict]) -> str:
+        elements_str = ""
+        for el in elements:
+            el_desc = f"ID: {el.get('visual_id', el.get('id'))} | Class: {el['class_name']}"
+            if el.get("text"):
+                el_desc += f" | Text: '{el['text']}'"
+            if el.get("content_desc"):
+                el_desc += f" | Desc: '{el['content_desc']}'"
+            if el.get("resource_id"):
+                el_desc += f" | ResourceId: '{el['resource_id']}'"
+            el_desc += f" | Clickable: {el.get('clickable', False)}"
+            elements_str += el_desc + "\n"
+        return elements_str
+
+    def _format_plan(self, plan: list) -> str:
+        plan_str = ""
+        for i, step in enumerate(plan):
+            if isinstance(step, dict):
+                plan_str += f"{i}. [CONDITIONAL] {step.get('description', '')}\n"
+                plan_str += f"   If: {step.get('condition', '')}\n"
+                plan_str += f"   Then: {step.get('on_true', 'skip')}\n"
+                plan_str += f"   Else: {step.get('on_false', 'skip')}\n"
+            else:
+                plan_str += f"{i}. {step}\n"
+        return plan_str
+
+    def _format_history(self, history: list[dict]) -> str:
+        history_str = ""
+        for idx, h in enumerate(history):
+            action = h.get("action", "unknown")
+            desc = h.get("description", "")
+            result = h.get("result_desc", "done")
+            evaluation = h.get("evaluation", "")
+            if action == "user_intervention":
+                history_str += f"[USER INSTRUCTION] {desc}\n"
+            else:
+                history_str += f"Step {idx+1}: {action.upper()} - {desc} → {result}"
+                if evaluation:
+                    history_str += f" | Eval: {evaluation}"
+                history_str += "\n"
+        return history_str
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Main agent action (ReAct loop)
+    # ─────────────────────────────────────────────────────────────────────
+
+    def get_next_action(
+        self,
+        goal: str,
+        history: list[dict],
+        elements: list[dict],
+        screenshot_base64: str | None = None,
+        plan: list | None = None,
+        current_plan_idx: int = 0,
+        memory: str = "",
+        intervention: str | None = None
+    ) -> dict:
+        """
+        ReAct loop: Think → Act.
+        Returns structured JSON with evaluation, memory, next_goal, and action fields.
+        """
+        elements_str = self._format_elements(elements)
+        system_prompt = load_prompt("get_next_action.md").replace("__ELEMENTS_STR__", elements_str)
+
+        # Build user message
+        user_content = f"Goal: {goal}\n"
+
+        if plan:
+            plan_str = self._format_plan(plan)
+            user_content += f"\nHigh-Level Plan:\n{plan_str}"
+            user_content += f"\nCurrently working on step index: {current_plan_idx}\n"
+
+        if memory:
+            user_content += f"\nAgent Memory (persistent context):\n{memory}\n"
+
+        if intervention:
+            user_content += f"\n⚠️ USER INSTRUCTION (follow immediately): {intervention}\n"
+
+        history_str = self._format_history(history)
+        user_content += f"\nExecution History:\n{history_str or 'No actions taken yet.'}\n"
+        user_content += "\nAnalyze the screen and decide the next action."
+
+        try:
+            return self._dispatch(system_prompt, user_content, screenshot_base64)
+        except Exception as e:
+            print(f"LLM get_next_action failed: {e}")
+            return {
+                "evaluation_previous_goal": f"LLM error: {e}",
+                "memory": memory,
+                "next_goal": "Stop due to error",
+                "action": "needs_intervention",
+                "target_id": None,
+                "value": None,
+                "explanation": f"LLM API error: {e}"
+            }
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Emergency replan
+    # ─────────────────────────────────────────────────────────────────────
+
+    def replan_from_state(
+        self,
+        goal: str,
+        history: list[dict],
+        elements: list[dict],
+        screenshot_base64: str | None = None
+    ) -> dict:
+        """
+        Emergency replan when the agent is stuck or on the wrong screen.
+        Returns: {diagnosis: str, recovery_steps: list[str]}
+        """
+        elements_str = self._format_elements(elements)
+        system_prompt = load_prompt("replan.md")
+        history_str = self._format_history(history)
+
+        user_content = (
+            f"Original Goal: {goal}\n\n"
+            f"Execution History (recent actions):\n{history_str or 'No actions yet.'}\n\n"
+            f"Current Screen Elements:\n{elements_str}\n\n"
+            "The agent is stuck. Generate recovery steps to get back on track."
         )
-        return self._clean_json(response.choices[0].message.content)
 
-    def _call_gemini(self, system_prompt: str, user_content: str, screenshot_base64: str | None) -> dict:
-        # For Gemini SDK, we use generative models
-        model = genai.GenerativeModel(
-            model_name=self.model,
-            system_instruction=system_prompt,
-            generation_config={"response_mime_type": "application/json"}
+        try:
+            result = self._dispatch(system_prompt, user_content, screenshot_base64)
+            if not isinstance(result.get("recovery_steps"), list):
+                result["recovery_steps"] = [goal]
+            return result
+        except Exception as e:
+            print(f"Replan failed: {e}")
+            return {
+                "diagnosis": f"Replan LLM call failed: {e}",
+                "recovery_steps": ["Press home button", "Continue with the original goal"]
+            }
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Step progress validation
+    # ─────────────────────────────────────────────────────────────────────
+
+    def validate_step_progress(
+        self,
+        goal: str,
+        plan: list,
+        history: list[dict],
+        elements: list[dict],
+        screenshot_base64: str | None = None
+    ) -> dict:
+        """
+        Validates progress after a step is executed.
+        Returns: {completed_indices, current_index, goal_achieved, is_looping, needs_replan, reason}
+        """
+        elements_str = self._format_elements(elements)
+        system_prompt = load_prompt("validate_progress.md").replace("__ELEMENTS_STR__", elements_str)
+
+        plan_str = self._format_plan(plan)
+        history_str = self._format_history(history)
+
+        user_content = (
+            f"Goal: {goal}\n\n"
+            f"Plan:\n{plan_str}\n\n"
+            f"Execution History:\n{history_str or 'None'}\n\n"
+            "Assess the current progress."
         )
 
-        contents = []
-        if screenshot_base64:
-            image_data = base64.b64decode(screenshot_base64)
-            contents.append({
-                "mime_type": "image/png",
-                "data": image_data
-            })
-        
-        contents.append(user_content)
-        response = model.generate_content(contents)
-        return self._clean_json(response.text)
+        try:
+            return self._dispatch(system_prompt, user_content, screenshot_base64)
+        except Exception as e:
+            print(f"Progress validation failed: {e}")
+            return {
+                "completed_indices": [],
+                "current_index": 0,
+                "goal_achieved": False,
+                "is_looping": False,
+                "needs_replan": False,
+                "reason": f"Validation error: {e}"
+            }
 
-    def _call_anthropic(self, system_prompt: str, user_content: str, screenshot_base64: str | None) -> dict:
-        content = []
-        if screenshot_base64:
-            content.append({
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": "image/png",
-                    "data": screenshot_base64
-                }
-            })
-        
-        content.append({
-            "type": "text",
-            "text": user_content
-        })
+    # ─────────────────────────────────────────────────────────────────────
+    # Test case evaluation
+    # ─────────────────────────────────────────────────────────────────────
 
-        response = self.client.messages.create(
-            model=self.model,
-            system=system_prompt,
-            messages=[
-                {"role": "user", "content": content}
-            ],
-            max_tokens=1000,
-            temperature=0.1
+    def evaluate_test_case(
+        self,
+        test_case: dict,
+        elements: list[dict],
+        screenshot_base64: str | None = None
+    ) -> dict:
+        """
+        Evaluates a test case assertion against current screen state.
+        Returns: {passed: bool, confidence: str, reason: str, evidence: str}
+        """
+        elements_str = self._format_elements(elements)
+        system_prompt = load_prompt("evaluate_test_case.md").replace("__ELEMENTS_STR__", elements_str)
+
+        user_content = (
+            f"Test Case Name: {test_case.get('name', 'Unnamed')}\n"
+            f"Assertion to evaluate: {test_case.get('description', '')}\n\n"
+            "Does the current screen satisfy this assertion? Evaluate carefully."
         )
-        return self._clean_json(response.content[0].text)
+
+        try:
+            result = self._dispatch(system_prompt, user_content, screenshot_base64)
+            if "passed" not in result:
+                result["passed"] = False
+            return result
+        except Exception as e:
+            print(f"Test case evaluation failed: {e}")
+            return {
+                "passed": False,
+                "confidence": "low",
+                "reason": f"Evaluation error: {e}",
+                "evidence": ""
+            }
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Plan generation
+    # ─────────────────────────────────────────────────────────────────────
+
+    def generate_initial_plan(self, goal: str, custom_prompt: str | None = None) -> list:
+        """Generates an initial high-level plan (with optional conditional steps)."""
+        system_prompt = custom_prompt if custom_prompt is not None else load_prompt("generate_plan.md")
+        user_content = f"Goal: {goal}"
+        try:
+            res = self._dispatch(system_prompt, user_content)
+            plan = res.get("plan", [])
+            if not isinstance(plan, list):
+                plan = [goal]
+            return plan
+        except Exception as e:
+            print(f"Plan generation failed: {e}")
+            return [goal]
+
+    def refine_plan(
+        self,
+        goal: str,
+        current_plan: list,
+        feedback: str,
+        custom_prompt: str | None = None
+    ) -> dict:
+        """Refines the current plan based on user feedback."""
+        system_prompt = custom_prompt if custom_prompt is not None else load_prompt("refine_plan.md")
+        plan_str = "\n".join([
+            f"- {step if isinstance(step, str) else step.get('description', str(step))}"
+            for step in current_plan
+        ])
+        user_content = (
+            f"Goal: {goal}\n\n"
+            f"Current Plan:\n{plan_str}\n\n"
+            f"User Feedback: {feedback}"
+        )
+        try:
+            res = self._dispatch(system_prompt, user_content)
+            return {
+                "plan": res.get("plan", current_plan),
+                "response": res.get("response", "Plan updated.")
+            }
+        except Exception as e:
+            print(f"Plan refinement failed: {e}")
+            return {"plan": current_plan, "response": f"Failed to refine plan: {e}"}
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Self-healing for playback
+    # ─────────────────────────────────────────────────────────────────────
 
     def heal_step(
         self,
@@ -215,22 +408,8 @@ class LLMClient:
         elements: list[dict],
         screenshot_base64: str | None = None
     ) -> dict:
-        """
-        Asks the LLM to heal a failed playback step.
-        """
-        # Format current elements for the LLM
-        elements_str = ""
-        for el in elements:
-            el_desc = f"ID: {el.get('visual_id', el.get('id'))} | Class: {el['class_name']}"
-            if el['text']:
-                el_desc += f" | Text: '{el['text']}'"
-            if el['content_desc']:
-                el_desc += f" | Desc: '{el['content_desc']}'"
-            if el['resource_id']:
-                el_desc += f" | ResourceId: '{el['resource_id']}'"
-            el_desc += f" | Clickable: {el['clickable']}"
-            elements_str += el_desc + "\n"
-
+        """Asks the LLM to heal a failed playback step."""
+        elements_str = self._format_elements(elements)
         system_prompt = load_prompt("heal_step.md").replace("__ELEMENTS_STR__", elements_str)
 
         user_content = (
@@ -241,18 +420,11 @@ class LLMClient:
             f"- Description: {failed_step.get('description')}\n"
             f"- Expected Selector: {json.dumps(failed_step.get('selector', {}))}\n"
             f"- Expected Value: {failed_step.get('value')}\n\n"
-            f"Please decide the recovery action."
+            "Please decide the recovery action."
         )
 
         try:
-            if self.provider == "gemini":
-                return self._call_gemini(system_prompt, user_content, screenshot_base64)
-            elif self.provider == "openai":
-                return self._call_openai(system_prompt, user_content, screenshot_base64)
-            elif self.provider == "anthropic":
-                return self._call_anthropic(system_prompt, user_content, screenshot_base64)
-            else:
-                return self._call_openai(system_prompt, user_content, screenshot_base64)
+            return self._dispatch(system_prompt, user_content, screenshot_base64)
         except Exception as e:
             print(f"Self-healing LLM call failed: {e}")
             return {
@@ -264,24 +436,12 @@ class LLMClient:
             }
 
     def assess_refinement_runs(self, goal: str, steps: list[dict]) -> int:
-        """
-        Asks the LLM to evaluate the recorded workflow and decide if we need 
-        1 or 2 runs to verify/refine it.
-        Returns the number of runs (1 or 2).
-        """
+        """Evaluates the recorded workflow to decide if 1 or 2 refinement runs are needed."""
         steps_str = json.dumps(steps, indent=2)
         system_prompt = load_prompt("assess_refinement.md")
         user_content = f"Goal: {goal}\n\nSteps:\n{steps_str}"
         try:
-            if self.provider == "gemini":
-                res = self._call_gemini(system_prompt, user_content, None)
-            elif self.provider == "openai":
-                res = self._call_openai(system_prompt, user_content, None)
-            elif self.provider == "anthropic":
-                res = self._call_anthropic(system_prompt, user_content, None)
-            else:
-                res = self._call_openai(system_prompt, user_content, None)
-            
+            res = self._dispatch(system_prompt, user_content)
             runs = int(res.get("runs", 1))
             if runs not in [1, 2]:
                 runs = 1
@@ -289,119 +449,3 @@ class LLMClient:
         except Exception as e:
             print(f"Refinement assessment failed: {e}")
             return 1
-
-    def generate_initial_plan(self, goal: str, custom_prompt: str | None = None) -> list[str]:
-        """Generates an initial high-level plan (checklist) to achieve the goal."""
-        system_prompt = custom_prompt if custom_prompt is not None else load_prompt("generate_plan.md")
-        user_content = f"Goal: {goal}"
-        try:
-            if self.provider == "gemini":
-                res = self._call_gemini(system_prompt, user_content, None)
-            elif self.provider == "openai":
-                res = self._call_openai(system_prompt, user_content, None)
-            elif self.provider == "anthropic":
-                res = self._call_anthropic(system_prompt, user_content, None)
-            else:
-                res = self._call_openai(system_prompt, user_content, None)
-            
-            plan = res.get("plan", [])
-            if not isinstance(plan, list):
-                plan = [goal]
-            return plan
-        except Exception as e:
-            print(f"Plan generation failed: {e}")
-            return [goal]
-
-    def validate_step_progress(
-        self,
-        goal: str,
-        plan: list[str],
-        history: list[dict],
-        elements: list[dict],
-        screenshot_base64: str | None = None
-    ) -> dict:
-        """
-        Validates progress against the plan after a step is executed.
-        Returns which plan steps are completed, the current active plan step, and if the overall goal is achieved.
-        """
-        elements_str = ""
-        for el in elements:
-            el_desc = f"ID: {el.get('visual_id', el.get('id'))} | Class: {el['class_name']}"
-            if el['text']:
-                el_desc += f" | Text: '{el['text']}'"
-            if el['content_desc']:
-                el_desc += f" | Desc: '{el['content_desc']}'"
-            el_desc += f" | Clickable: {el['clickable']}"
-            elements_str += el_desc + "\n"
-
-        history_str = ""
-        for idx, h in enumerate(history):
-            history_str += f"Step {idx+1}: Action: {h['action']} -> {h.get('description', '')}\n"
-
-        plan_str = ""
-        for idx, item in enumerate(plan):
-            plan_str += f"{idx}: {item}\n"
-
-        system_prompt = load_prompt("validate_progress.md").replace("__ELEMENTS_STR__", elements_str)
-
-        user_content = (
-            f"Goal: {goal}\n\n"
-            f"Plan:\n{plan_str}\n\n"
-            f"Execution History:\n{history_str or 'None'}\n\n"
-            "Assess the progress."
-        )
-
-        try:
-            if self.provider == "gemini":
-                return self._call_gemini(system_prompt, user_content, screenshot_base64)
-            elif self.provider == "openai":
-                return self._call_openai(system_prompt, user_content, screenshot_base64)
-            elif self.provider == "anthropic":
-                return self._call_anthropic(system_prompt, user_content, screenshot_base64)
-            else:
-                return self._call_openai(system_prompt, user_content, screenshot_base64)
-        except Exception as e:
-            print(f"Progress validation failed: {e}")
-            return {
-                "completed_indices": [],
-                "current_index": 0,
-                "goal_achieved": False
-            }
-
-    def refine_plan(
-        self,
-        goal: str,
-        current_plan: list[str],
-        feedback: str,
-        custom_prompt: str | None = None
-    ) -> dict:
-        """Refines the current plan based on user feedback."""
-        system_prompt = custom_prompt if custom_prompt is not None else load_prompt("refine_plan.md")
-        
-        plan_str = "\n".join([f"- {item}" for item in current_plan])
-        user_content = (
-            f"Goal: {goal}\n\n"
-            f"Current Plan:\n{plan_str}\n\n"
-            f"User Feedback: {feedback}"
-        )
-        
-        try:
-            if self.provider == "gemini":
-                res = self._call_gemini(system_prompt, user_content, None)
-            elif self.provider == "openai":
-                res = self._call_openai(system_prompt, user_content, None)
-            elif self.provider == "anthropic":
-                res = self._call_anthropic(system_prompt, user_content, None)
-            else:
-                res = self._call_openai(system_prompt, user_content, None)
-            
-            plan = res.get("plan", current_plan)
-            response = res.get("response", "I have updated the plan according to your feedback.")
-            return {"plan": plan, "response": response}
-        except Exception as e:
-            print(f"Plan refinement failed: {e}")
-            return {
-                "plan": current_plan,
-                "response": f"Failed to refine plan: {e}"
-            }
-

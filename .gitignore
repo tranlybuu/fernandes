@@ -22,3 +22,10 @@ __pycache__/
 .pytest_cache/
 .venv/
 venv/
+
+# Local config file containing API keys
+config.json
+
+# Local temp workflows
+backend/workflows/*.json
+!backend/workflows/open_github_trending.json

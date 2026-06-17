@@ -21,11 +21,57 @@ for pt_path in platform_tools_paths:
         os.environ["PATH"] = pt_path + os.pathsep + os.environ.get("PATH", "")
         break
 
+# Common Android app name → package name mapping
+COMMON_APP_PACKAGES = {
+    "youtube": "com.google.android.youtube",
+    "gmail": "com.google.android.gm",
+    "chrome": "com.android.chrome",
+    "google chrome": "com.android.chrome",
+    "settings": "com.android.settings",
+    "maps": "com.google.android.apps.maps",
+    "google maps": "com.google.android.apps.maps",
+    "photos": "com.google.android.apps.photos",
+    "google photos": "com.google.android.apps.photos",
+    "camera": "com.android.camera2",
+    "calendar": "com.google.android.calendar",
+    "google calendar": "com.google.android.calendar",
+    "contacts": "com.google.android.contacts",
+    "messages": "com.google.android.apps.messaging",
+    "phone": "com.google.android.dialer",
+    "play store": "com.android.vending",
+    "playstore": "com.android.vending",
+    "google play": "com.android.vending",
+    "spotify": "com.spotify.music",
+    "facebook": "com.facebook.katana",
+    "instagram": "com.instagram.android",
+    "twitter": "com.twitter.android",
+    "x": "com.twitter.android",
+    "tiktok": "com.zhiliaoapp.musically",
+    "netflix": "com.netflix.mediaclient",
+    "whatsapp": "com.whatsapp",
+    "telegram": "org.telegram.messenger",
+    "zoom": "us.zoom.videomeetings",
+    "slack": "com.Slack",
+    "discord": "com.discord",
+    "amazon": "com.amazon.mShop.android.shopping",
+    "files": "com.google.android.apps.nbu.files",
+    "clock": "com.google.android.deskclock",
+    "calculator": "com.google.android.calculator",
+    "drive": "com.google.android.apps.docs",
+    "google drive": "com.google.android.apps.docs",
+    "docs": "com.google.android.apps.docs.editors.docs",
+    "google docs": "com.google.android.apps.docs.editors.docs",
+    "sheets": "com.google.android.apps.docs.editors.sheets",
+    "meet": "com.google.android.apps.tachyon",
+    "google meet": "com.google.android.apps.tachyon",
+}
+
+
 class EmulatorManager:
-    def __init__(self, device_serial: str | None = None):
+    def __init__(self, device_serial: str | None = None, auto_connect: bool = True):
         self.device_serial = device_serial
         self.d = None
-        if device_serial:
+        if device_serial and auto_connect:
             self.connect()
 
     def connect(self):
@@ -241,6 +287,52 @@ class EmulatorManager:
         if not self.d:
             raise Exception("Device not connected")
         self.d.app_start(package_name)
+
+    def launch_app_by_name(self, app_name: str) -> bool:
+        """Launch an app by its common name. Returns True if launched successfully."""
+        if not self.d:
+            raise Exception("Device not connected")
+        
+        normalized = app_name.lower().strip()
+        
+        # Try exact match in common packages
+        package = COMMON_APP_PACKAGES.get(normalized)
+        
+        # Try partial match if exact not found
+        if not package:
+            for key, pkg in COMMON_APP_PACKAGES.items():
+                if key in normalized or normalized in key:
+                    package = pkg
+                    break
+        
+        # Try ADB package label search as fallback
+        if not package:
+            try:
+                result = subprocess.run(
+                    ["adb", "-s", self.device_serial, "shell", "pm", "list", "packages", "-3"],
+                    capture_output=True, text=True, timeout=5
+                )
+                third_party = [line.replace("package:", "").strip() for line in result.stdout.splitlines() if line.startswith("package:")]
+                
+                # Match by package name substring
+                for pkg in third_party:
+                    if normalized.replace(" ", "") in pkg.replace(".", "").lower():
+                        package = pkg
+                        break
+            except Exception as e:
+                print(f"ADB package search failed: {e}")
+        
+        if package:
+            try:
+                self.d.app_start(package)
+                return True
+            except Exception as e:
+                print(f"Failed to launch {package}: {e}")
+                return False
+        
+        # Last resort: press home and let user/LLM figure it out
+        print(f"Could not find package for app: {app_name}")
+        return False
 
     def stop_app(self, package_name: str):
         if not self.d:

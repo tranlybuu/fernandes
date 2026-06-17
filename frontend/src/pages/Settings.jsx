@@ -10,7 +10,7 @@ export default function Settings() {
 
   const fetchSettings = async () => {
     try {
-      const res = await fetch('http://localhost:8000/api/settings');
+      const res = await fetch('http://127.0.0.1:8000/api/settings');
       if (res.ok) {
         const data = await res.json();
         setGeminiKey(data.gemini_api_key || '');
@@ -31,7 +31,7 @@ export default function Settings() {
   const handleSave = async (e) => {
     e.preventDefault();
     try {
-      const res = await fetch('http://localhost:8000/api/settings', {
+      const res = await fetch('http://127.0.0.1:8000/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
