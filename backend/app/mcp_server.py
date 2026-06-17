@@ -15,6 +15,7 @@ builtins.print = safe_print
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 try:
     from .emulator import EmulatorManager
 except ImportError:
@@ -25,7 +26,10 @@ mcp = FastMCP(
     "Fernandes Device Control",
     host=os.environ.get("MCP_HOST", "127.0.0.1"),
     port=int(os.environ.get("MCP_PORT", "8012")),
-    stateless_http=True
+    stateless_http=True,
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=False
+    )
 )
 
 # In-memory cache for elements from the last get_screenshot call, keyed by device_serial
