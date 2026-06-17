@@ -17,7 +17,7 @@ install:
 
 start-backend:
 	@echo "=== Starting FastAPI Backend on port 8000 ==="
-	cd backend && ../$(VENV_DIR)/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+	cd backend && ../$(VENV_DIR)/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips='*'
 
 start-frontend:
 	@echo "=== Starting Vite React Frontend on http://localhost:5173 ==="

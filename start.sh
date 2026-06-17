@@ -22,7 +22,7 @@ else
     echo "Error: Virtual environment activation script not found!"
     exit 1
 fi
-uvicorn app.main:app --host 127.0.0.1 --port 8000 &
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips='*' &
 BACKEND_PID=$!
 
 echo -e "${CYAN}Starting Vite React Frontend on http://localhost:5173...${NC}"
