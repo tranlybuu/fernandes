@@ -32,7 +32,6 @@ app.add_middleware(
 )
 
 app.mount("/mcp", mcp.sse_app())
-app.mount("/", mcp_http_app)
 
 engine = WorkflowEngine()
 
@@ -727,3 +726,6 @@ def refine_plan_api(req: PlanRefineRequest):
         return res
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# Mount MCP HTTP app at the very end to prevent it from intercepting other routes
+app.mount("/", mcp_http_app)
