@@ -9,7 +9,8 @@ export default function DeviceSelector({ selectedSerial, onSelectDevice }) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('http://127.0.0.1:8000/api/devices');
+      const apiBase = window.location.port === '5173' ? 'http://127.0.0.1:8000' : window.location.origin;
+      const res = await fetch(`${apiBase}/api/devices`);
       if (!res.ok) throw new Error('Failed to fetch devices');
       const data = await res.json();
       setDevices(data);

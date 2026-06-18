@@ -1,4 +1,4 @@
-.PHONY: install start start-backend start-frontend clean
+.PHONY: install start dev start-backend start-frontend clean
 
 OS := $(shell uname -s)
 VENV_DIR = backend/venv
@@ -24,7 +24,13 @@ start-frontend:
 	cd frontend && npm run dev
 
 start:
-	@echo "=== Starting Fernandes Mobile AI Agent ==="
+	@echo "=== Building Frontend Production Assets ==="
+	cd frontend && npm run build
+	@echo "=== Starting Fernandes Unified Server on http://localhost:8000 ==="
+	cd backend && ../$(VENV_DIR)/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips='*'
+
+dev:
+	@echo "=== Starting Fernandes in Development Mode ==="
 	@trap 'kill 0' EXIT; \
 	make start-backend & \
 	make start-frontend & \

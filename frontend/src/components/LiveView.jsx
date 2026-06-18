@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 
 export default function LiveView({ deviceSerial, showAnnotated = false, onElementHover }) {
+  const apiBase = window.location.port === '5173' ? 'http://127.0.0.1:8000' : window.location.origin;
+  const wsHost = window.location.port === '5173' ? '127.0.0.1:8000' : window.location.host;
+
   const [screenshot, setScreenshot] = useState(null);
   const [elements, setElements] = useState([]);
   const [naturalWidth, setNaturalWidth] = useState(1080); // default fallback
@@ -18,7 +21,7 @@ export default function LiveView({ deviceSerial, showAnnotated = false, onElemen
 
     setLoading(true);
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//127.0.0.1:8000/ws/live/${deviceSerial}?showAnnotated=${showAnnotated}`;
+    const wsUrl = `${protocol}//${wsHost}/ws/live/${deviceSerial}?showAnnotated=${showAnnotated}`;
     
     console.log("Connecting LiveView WS:", wsUrl);
     const ws = new WebSocket(wsUrl);
@@ -87,7 +90,7 @@ export default function LiveView({ deviceSerial, showAnnotated = false, onElemen
     console.log(`Clicking actual screen at (${actualX}, ${actualY})`);
 
     try {
-      await fetch('http://127.0.0.1:8000/api/action', {
+      await fetch(`${apiBase}/api/action`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -107,7 +110,7 @@ export default function LiveView({ deviceSerial, showAnnotated = false, onElemen
   const sendSystemKey = async (key) => {
     if (!deviceSerial) return;
     try {
-      await fetch('http://127.0.0.1:8000/api/action', {
+      await fetch(`${apiBase}/api/action`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -125,7 +128,7 @@ export default function LiveView({ deviceSerial, showAnnotated = false, onElemen
   const sendSwipe = async (dir) => {
     if (!deviceSerial) return;
     try {
-      await fetch('http://127.0.0.1:8000/api/action', {
+      await fetch(`${apiBase}/api/action`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -145,7 +148,7 @@ export default function LiveView({ deviceSerial, showAnnotated = false, onElemen
     if (!inputText || !deviceSerial || inputTextLoading) return;
     setInputTextLoading(true);
     try {
-      await fetch('http://127.0.0.1:8000/api/action', {
+      await fetch(`${apiBase}/api/action`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
