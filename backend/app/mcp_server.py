@@ -318,6 +318,93 @@ def get_current_package(device_serial: str) -> str:
     except Exception as e:
         return f"Error getting current package: {e}"
 
+@mcp.resource(
+    "docs://api-specification",
+    name="rest_api_specification",
+    title="Fernandes REST API Specification",
+    description="The complete REST API specification and endpoints for controlling Android devices",
+    mime_type="text/markdown"
+)
+def get_api_specification() -> str:
+    """
+    Get the REST API specification and endpoints for controlling Android devices.
+    """
+    return """# Fernandes Device Control REST API Specification
+
+In addition to using direct MCP tools, you can control the connected devices using these HTTP REST endpoints. The backend server runs locally on http://127.0.0.1:8000.
+
+## Base URL: http://127.0.0.1:8000
+
+## Endpoints
+
+### 1. Devices List
+* **URL**: `/api/devices`
+* **Method**: `GET`
+* **Response**: List of connected devices.
+  ```json
+  [
+    {
+      "serial": "emulator-5554",
+      "status": "device",
+      "model": "sdk_gphone16k_arm64"
+    }
+  ]
+  ```
+
+### 2. Connect / Unlock Device
+* **URL**: `/api/connect/{device_serial}`
+* **Method**: `POST`
+* **Response**: `{"status": "success", "detail": "..."}`
+
+### 3. Screen Captures
+* **Raw Base64 Screenshot**: `GET /api/screenshot/{device_serial}` -> returns `{"screenshot": "<base64>"}`
+* **Raw Binary Image**: `GET /api/screenshot/{device_serial}/raw` -> returns binary `image/jpeg`
+* **Annotated Base64 Screenshot**: `GET /api/annotated-screenshot/{device_serial}` -> returns `{"screenshot": "<base64>", "elements": [...]}` and populates/updates the visual element ID cache.
+* **Annotated Binary Image**: `GET /api/annotated-screenshot/{device_serial}/raw` -> returns binary `image/jpeg`
+
+### 4. Device Layout & Properties
+* **UI Hierarchy XML**: `GET /api/hierarchy/{device_serial}` -> returns `application/xml` representation of active screen.
+* **Device System Info**: `GET /api/info/{device_serial}` -> returns device system parameters.
+* **Window Size**: `GET /api/window-size/{device_serial}` -> returns `{"width": 1080, "height": 1920}`.
+* **Current Foreground Package**: `GET /api/current-package/{device_serial}` -> returns `{"package": "com.android.settings"}`.
+
+### 5. Execute Action
+* **URL**: `/api/action`
+* **Method**: `POST`
+* **Content-Type**: `application/json`
+* **Body Model**:
+  ```json
+  {
+    "device_serial": "string",
+    "action": "string",
+    "x": "integer (optional)",
+    "y": "integer (optional)",
+    "value": "string (optional)",
+    "visual_id": "integer (optional)",
+    "start_x": "integer (optional)",
+    "start_y": "integer (optional)",
+    "end_x": "integer (optional)",
+    "end_y": "integer (optional)",
+    "steps": "integer (optional, default: 10)"
+  }
+  ```
+* **Supported Action Values**:
+  * `"connect"`: Connects and unlocks device.
+  * `"click"`: Clicks at coordinates `(x, y)`.
+  * `"click_element"`: Clicks cached element center using `visual_id` (must run an annotated screenshot first).
+  * `"input_text"`: Types text passed in `value`.
+  * `"press_key"`: Presses system key passed in `value` (e.g., `"home"`, `"back"`, `"enter"`).
+  * `"swipe"`: Swipes in direction passed in `value` (`"up"`, `"down"`, `"left"`, `"right"`).
+  * `"swipe_coordinates"`: Swipes from `(start_x, start_y)` to `(end_x, end_y)` in `steps`.
+  * `"open_app"`: Launches app by package name or common app name in `value`.
+  * `"stop_app"`: Forces app package in `value` to stop.
+
+### 6. Live WebSocket View
+* **URL**: `/ws/live/{device_serial}?showAnnotated=true`
+* **Protocol**: `ws://` / `wss://`
+* **Description**: WebSocket stream serving live screen frames and updating the element ID cache.
+"""
+
 if __name__ == "__main__":
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == "sse":
