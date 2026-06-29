@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 
 export default function LiveView({ deviceSerial, showAnnotated = false, onElementHover }) {
-  const apiBase = window.location.port === '5173' ? 'http://127.0.0.1:8000' : window.location.origin;
-  const wsHost = window.location.port === '5173' ? '127.0.0.1:8000' : window.location.host;
+  const apiBase = window.location.port === '5173' ? 'http://127.0.0.1:9999' : window.location.origin;
+  const wsHost = window.location.port === '5173' ? '127.0.0.1:9999' : window.location.host;
 
   const [screenshot, setScreenshot] = useState(null);
   const [elements, setElements] = useState([]);

@@ -331,9 +331,9 @@ def get_api_specification() -> str:
     """
     return """# Fernandes Device Control REST API Specification
 
-In addition to using direct MCP tools, you can control the connected devices using these HTTP REST endpoints. The backend server runs locally on http://127.0.0.1:8000.
+In addition to using direct MCP tools, you can control the connected devices using these HTTP REST endpoints. The backend server runs locally on http://127.0.0.1:9999.
 
-## Base URL: http://127.0.0.1:8000
+## Base URL: http://127.0.0.1:9999
 
 ## Endpoints
 

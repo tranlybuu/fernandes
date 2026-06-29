@@ -18,7 +18,7 @@ if [ ! -d "frontend/dist" ]; then
     cd frontend && npm run build && cd ..
 fi
 
-echo -e "${CYAN}Starting Python FastAPI Backend + Frontend on http://localhost:8000...${NC}"
+echo -e "${CYAN}Starting Python FastAPI Backend + Frontend on http://localhost:9999...${NC}"
 cd backend
 if [ -f "venv/Scripts/activate" ]; then
     source venv/Scripts/activate
@@ -29,9 +29,9 @@ else
     exit 1
 fi
 
-echo -e "${GREEN}Fernandes is live at: http://localhost:8000${NC}"
-echo -e "${CYAN}Agent MCP connection string: http://localhost:8000/mcp/sse${NC}"
+echo -e "${GREEN}Fernandes is live at: http://localhost:9999${NC}"
+echo -e "${CYAN}Agent MCP connection string: http://localhost:9999/mcp/sse${NC}"
 echo -e "${CYAN}To run frontend development server (with hot-reloading): cd frontend && npm run dev${NC}"
 echo -e "Press Ctrl+C to stop."
 
-uvicorn app.main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips='*'
+uvicorn app.main:app --host 127.0.0.1 --port 9999 --proxy-headers --forwarded-allow-ips='*'
